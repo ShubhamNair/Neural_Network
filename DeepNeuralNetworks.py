@@ -1,6 +1,5 @@
 import numpy as np
 
-
 class Parameters:
     def __init__(self):
         self.weights = None
@@ -99,7 +98,7 @@ class Loss:
 
 
 class Layer:
-    def __init__(self, neurons, parameters, activation_type):
+    def __init__(self, neurons, parameters, activation_type, regularization=None, dropout_rate=None):
         self.neurons = neurons
         self.parameters = parameters
         self.weights = self.parameters.get_weights()
@@ -107,8 +106,11 @@ class Layer:
         self.activation_type = activation_type
         self.activation = Activation(activation_type)
         self.neurons_layer = len(neurons)
+        self.regularization = regularization
+        self.dropout_rate = dropout_rate
+        self.dropout_mask = None
 
-    def forward(self, inputs):
+    def forward(self, inputs, training=True):
         outputs = []
         for neuron in self.neurons:
             neuron.weights = np.random.rand(self.neurons_layer)
@@ -116,7 +118,13 @@ class Layer:
             neuron.layer = self
             neuron.neuron(inputs)
             outputs.append(neuron.output)
-        return np.array(outputs)
+        outputs = np.array(outputs)
+        
+        if training and self.dropout_rate is not None:
+            self.dropout_mask = np.random.binomial(1, 1 - self.dropout_rate, size=outputs.shape) / (1 - self.dropout_rate)
+            outputs *= self.dropout_mask
+        
+        return outputs
 
     def backward(self, inputs, deltas, learning_rate):
         next_layer = self.layer_below
@@ -125,6 +133,10 @@ class Layer:
             delta = deltas[i]
             activation_derivative = neuron.activation_derivative()
             error = np.dot(delta, next_deltas) * activation_derivative
+            if self.regularization == 'l1':
+                error += learning_rate * np.sign(neuron.weights)
+            elif self.regularization == 'l2':
+                error += learning_rate * neuron.weights
             neuron.update_weights(learning_rate, error)
 
 
@@ -133,10 +145,10 @@ class NeuralNetwork:
         self.input_size = input_size
         self.layers = []
 
-    def add_layer(self, num_neurons, activation_type):
+    def add_layer(self, num_neurons, activation_type, regularization=None, dropout_rate=None):
         parameters = Parameters()
         parameters.set_bias(np.random.rand(num_neurons))
-        layer = Layer([Neuron(self.input_size) for _ in range(num_neurons)], parameters, activation_type)
+        layer = Layer([Neuron(self.input_size) for _ in range(num_neurons)], parameters, activation_type, regularization, dropout_rate)
         self.layers.append(layer)
         if len(self.layers) > 1:
             self.layers[-2].layer_below = layer
@@ -157,13 +169,19 @@ class NeuralNetwork:
         else:
             raise ValueError(f"Invalid loss function type: {loss_type}")
 
-    def train(self, X_train, y_train, learning_rate, epochs, loss_type):
+    def train(self, X_train, y_train, X_val, y_val, learning_rate, epochs, loss_type):
         for epoch in range(epochs):
             # Forward pass
             predictions = self.forward(X_train)
 
-            # Calculate loss
-            loss = self.calculate_loss(predictions, y_train, loss_type)
+            # Calculate training loss
+            training_loss = self.calculate_loss(predictions, y_train, loss_type)
+
+            # Validation forward pass
+            val_predictions = self.forward(X_val)
+
+            # Calculate validation loss
+            validation_loss = self.calculate_loss(val_predictions, y_val, loss_type)
 
             # Backpropagation
             self.layers[-1].deltas = predictions - y_train
@@ -172,21 +190,33 @@ class NeuralNetwork:
 
             # Print epoch information
             if epoch % 100 == 0:
-                print(f"Epoch {epoch}: Loss = {loss}")
+                print(f"Epoch {epoch}: Training Loss = {training_loss}, Validation Loss = {validation_loss}")
 
 
-# Test the deep neural network
+# Prototype of training, validation, and testing sets
 input_size = 2
-X_train = np.random.randint(2, size=(10, input_size))
-y_train = np.random.randint(2, size=(10, 1))
+X_train = np.random.randint(2, size=(100, input_size))
+y_train = np.random.randint(2, size=(100, 1))
 
+X_val = np.random.randint(2, size=(20, input_size))
+y_val = np.random.randint(2, size=(20, 1))
+
+X_test = np.random.randint(2, size=(20, input_size))
+y_test = np.random.randint(2, size=(20, 1))
+
+# Create and train the neural network
 dnn = NeuralNetwork(input_size)
-dnn.add_layer(3, "relu")
-dnn.add_layer(2, "sigmoid")
-dnn.add_layer(1, "sigmoid")
+dnn.add_layer(3, "relu", regularization='l2', dropout_rate=0.2)
+dnn.add_layer(2, "sigmoid", regularization='l2', dropout_rate=0.2)
+dnn.add_layer(1, "sigmoid", regularization='l2', dropout_rate=0.2)
 
 learning_rate = 0.01
 epochs = 1000
 loss_type = "mean_squared_error"
 
-dnn.train(X_train, y_train, learning_rate, epochs, loss_type)
+dnn.train(X_train, y_train, X_val, y_val, learning_rate, epochs, loss_type)
+
+# Test the neural network
+predictions = dnn.forward(X_test)
+test_loss = dnn.calculate_loss(predictions, y_test, loss_type)
+print(f"Test Loss: {test_loss}")
